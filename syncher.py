@@ -2,18 +2,77 @@ import sys
 import cv2
 import json
 import numpy as np
+import subprocess
+import os
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QFileDialog, QSlider, QSpinBox, QGroupBox, QFormLayout, QSizePolicy,
-    QMessageBox
+    QMessageBox, QProgressDialog
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
 
+class FFmpegWorker(QThread):
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, input_path, target_fps=50):
+        super().__init__()
+        self.input_path = input_path
+        self.target_fps = target_fps
+        
+    def run(self):
+        try:
+            # Create temporary output file
+            input_path = str(self.input_path)
+            temp_path = input_path.replace('.mp4', '_temp_fps.mp4')
+            
+            self.progress.emit(f"Converting {os.path.basename(input_path)} to {self.target_fps} FPS...")
+            
+            # FFmpeg command to change FPS
+            cmd = [
+                'ffmpeg', '-i', input_path,
+                '-filter:v', f'fps={self.target_fps}',
+                '-y',  # Overwrite output file
+                temp_path
+            ]
+            
+            # Run ffmpeg
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Replace original file with converted file
+                import time
+                # Small delay to ensure file handles are released
+                time.sleep(0.5)
+                
+                # On Windows, try to remove the original file first
+                try:
+                    if os.path.exists(input_path):
+                        os.remove(input_path)
+                    os.rename(temp_path, input_path)
+                except OSError as e:
+                    # If rename fails, try copy and delete
+                    import shutil
+                    shutil.copy2(temp_path, input_path)
+                    os.remove(temp_path)
+                
+                self.finished.emit(True, f"Successfully converted to {self.target_fps} FPS")
+            else:
+                self.finished.emit(False, f"FFmpeg error: {result.stderr}")
+                # Clean up temp file if it exists
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    
+        except Exception as e:
+            self.finished.emit(False, f"Error: {str(e)}")
+
+
 class VideoPanel:
-    def __init__(self, title, parent_widget, video_path=None):
+    def __init__(self, title, parent_widget, video_path=None, is_pressure=False):
         self.title = title
+        self.is_pressure = is_pressure
         self.label = QLabel(title)
         self.label.setMinimumSize(480, 360)
         self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -34,6 +93,7 @@ class VideoPanel:
         self.original_fps = None
         self.total_frames = 0
         self.total_duration = 0
+        self.video_path = None
 
         self.parent = parent_widget
         self.cached_frames = []
@@ -70,6 +130,103 @@ class VideoPanel:
         self.step_btn.clicked.connect(self.step_once)
         self.restart_btn.clicked.connect(self.restart)
 
+    def check_and_fix_fps(self):
+        """Check if video is at 50 FPS and offer to fix if not"""
+        if not self.video_path or not self.original_fps:
+            return True
+        
+        target_fps = 50.0
+        fps_tolerance = 1.0  # Allow small variations
+        
+        if abs(self.original_fps - target_fps) > fps_tolerance:
+            if self.is_pressure:
+                # Pressure video should always be 50 FPS
+                QMessageBox.warning(
+                    self.parent, 
+                    "Pressure Video FPS Error", 
+                    f"Pressure video is at {self.original_fps:.1f} FPS but should be 50 FPS.\n"
+                    "Please fix the pressure video FPS before proceeding.\n\n"
+                    "The pressure video must be exactly 50 FPS for synchronization to work correctly."
+                )
+                return False
+            else:
+                # RGB video can be converted
+                msgBox = QMessageBox(self.parent)
+                msgBox.setWindowTitle("RGB Video FPS Conversion")
+                msgBox.setText(f"RGB video is at {self.original_fps:.1f} FPS.")
+                msgBox.setInformativeText("What would you like to do?")
+                
+                if self.original_fps < target_fps:
+                    convert_btn = msgBox.addButton("Set to 50 FPS", QMessageBox.AcceptRole)
+                else:
+                    convert_btn = msgBox.addButton("Set to 50 FPS", QMessageBox.AcceptRole)
+                
+                continue_btn = msgBox.addButton("Continue", QMessageBox.RejectRole)
+                
+                msgBox.exec_()
+                
+                if msgBox.clickedButton() == convert_btn:
+                    return self.convert_fps()
+                else:
+                    return True  # Continue with current FPS
+        
+        return True  # FPS is acceptable
+    
+    def convert_fps(self):
+        """Convert video to 50 FPS using FFmpeg"""
+        try:
+            # Check if ffmpeg is available
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            QMessageBox.critical(
+                self.parent,
+                "FFmpeg Not Found",
+                "FFmpeg is not installed or not available in PATH.\n"
+                "Please install FFmpeg to convert video FPS."
+            )
+            return False
+        
+        # Close the video capture to release the file handle
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        
+        # Create progress dialog
+        progress = QProgressDialog("Converting video FPS...", None, 0, 0, self.parent)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setCancelButton(None)  # No cancel button
+        progress.show()
+        QApplication.processEvents()
+        
+        # Create and start worker thread
+        self.worker = FFmpegWorker(self.video_path, 50)
+        success = [False]  # Use list to modify from inner function
+        
+        def on_progress(message):
+            progress.setLabelText(message)
+            QApplication.processEvents()
+        
+        def on_finished(success_flag, message):
+            success[0] = success_flag
+            progress.close()
+            if success_flag:
+                QMessageBox.information(self.parent, "Success", message)
+                # Reload the video to update FPS info
+                self.load_video(self.video_path)
+            else:
+                QMessageBox.critical(self.parent, "Conversion Failed", message)
+                # Try to reload the original video even if conversion failed
+                self.load_video(self.video_path)
+        
+        self.worker.progress.connect(on_progress)
+        self.worker.finished.connect(on_finished)
+        self.worker.start()
+        
+        # Wait for worker to finish
+        self.worker.wait()
+        
+        return success[0]
+
     def load_video(self, path=None):
         if path is None:
             path, _ = QFileDialog.getOpenFileName(self.parent, f"Open {self.title}")
@@ -77,6 +234,7 @@ class VideoPanel:
             cap = cv2.VideoCapture(path)
             if cap.isOpened():
                 self.cap = cap
+                self.video_path = path
                 self.original_fps = cap.get(cv2.CAP_PROP_FPS)
                 self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 
@@ -89,6 +247,15 @@ class VideoPanel:
                 # Update displays
                 self.fps_display.setText(f"FPS: {self.original_fps:.1f}")
                 self.update_time_display()
+                
+                # Check FPS and offer to fix if needed
+                if not self.check_and_fix_fps():
+                    # User cancelled or FPS check failed
+                    if self.cap:
+                        self.cap.release()
+                    self.cap = None
+                    self.video_path = None
+                    return None
                 
                 self.cached_frames = []
                 self._cache_initial_frames()
@@ -134,7 +301,7 @@ class VideoPanel:
             self.play_btn.setText("Play")
         else:
             # Use original FPS for playback
-            if self.original_fps > 0:
+            if self.original_fps and self.original_fps > 0:
                 interval = int(1000 / self.original_fps)
                 self.timer.start(interval)
                 self.play_btn.setText("Pause")
@@ -196,7 +363,7 @@ class VideoPanel:
         }
 
     def play(self):
-        if not self.timer.isActive() and self.original_fps > 0:
+        if not self.timer.isActive() and self.original_fps and self.original_fps > 0:
             interval = int(1000 / self.original_fps)
             self.timer.start(interval)
             self.play_btn.setText("Pause")
@@ -238,12 +405,14 @@ class VideoSyncApp(QWidget):
 
         self.load_rgb_btn = QPushButton("Load RGB Video")
         self.load_pressure_btn = QPushButton("Load Pressure Video")
+        self.validate_fps_btn = QPushButton("Validate FPS")
         self.save_btn = QPushButton("Save Sync Config")
         self.play_both_btn = QPushButton("Play/Pause Both")
         self.test_offset_btn = QPushButton("Test Offset Playback")
 
         self.load_rgb_btn.clicked.connect(self.load_rgb_video)
         self.load_pressure_btn.clicked.connect(self.load_pressure_video)
+        self.validate_fps_btn.clicked.connect(self.validate_fps)
         self.save_btn.clicked.connect(self.save_sync)
         self.play_both_btn.clicked.connect(self.toggle_both)
         self.test_offset_btn.clicked.connect(self.play_with_offset)
@@ -267,6 +436,7 @@ class VideoSyncApp(QWidget):
         control_layout = QHBoxLayout()
         control_layout.addWidget(self.load_rgb_btn)
         control_layout.addWidget(self.load_pressure_btn)
+        control_layout.addWidget(self.validate_fps_btn)
         control_layout.addStretch()
         control_layout.addWidget(self.play_both_btn)
         control_layout.addWidget(self.test_offset_btn)
@@ -285,6 +455,24 @@ class VideoSyncApp(QWidget):
 
     def load_pressure_video(self):
         self.pressure_video_path = self.pressure_video.load_video()
+
+    def validate_fps(self):
+        """Manually validate FPS of both videos"""
+        rgb_valid = True
+        pressure_valid = True
+        
+        if self.rgb_video.cap:
+            rgb_valid = self.rgb_video.check_and_fix_fps()
+        
+        if self.pressure_video.cap:
+            pressure_valid = self.pressure_video.check_and_fix_fps()
+        
+        if rgb_valid and pressure_valid:
+            QMessageBox.information(self, "FPS Validation", "Both videos have valid FPS (50 FPS).")
+        elif not rgb_valid:
+            QMessageBox.warning(self, "FPS Validation", "RGB video FPS validation failed.")
+        elif not pressure_valid:
+            QMessageBox.warning(self, "FPS Validation", "Pressure video FPS validation failed.")
 
     def toggle_both(self):
         if self.rgb_video.timer.isActive() or self.pressure_video.timer.isActive():

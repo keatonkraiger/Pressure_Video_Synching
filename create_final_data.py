@@ -169,8 +169,8 @@ class DataProcessor:
         patterns = [
             (f"{base_name}_V1.mp4", 'rgb_v1'),
             (f"{base_name}_V2.mp4", 'rgb_v2'),
-            (f"{base_name}_Raw_Pressure.npy", 'pressure_npy'),
-            (f"{base_name}_Raw_Pressure.mp4", 'pressure_video'),
+            (f"Original_Pressure.npy", 'pressure_npy'),
+            (f"Original_Pressure.mp4", 'pressure_video'),
             (f"{base_name}.mp4", 'pressure_video')  # Alternative pressure video name
         ]
         
@@ -193,12 +193,15 @@ class DataProcessor:
         associated_files = self.find_associated_files(config_path)
         
         # Use local files instead of config paths
-        rgb_video_path = associated_files['rgb_v1']  # Primary RGB video (V1)
+        rgb_video1_path = associated_files['rgb_v1']  # Primary RGB video (V1)
+        rgb_video2_path = associated_files['rgb_v2']  # Secondary RGB video (V2)
+        
         pressure_video_path = associated_files['pressure_video']
         
-        if not rgb_video_path or not pressure_video_path:
+        if not rgb_video1_path or not rgb_video2_path or not pressure_video_path:
             print(f"  Error: Could not find required video files in {config_path.parent}")
-            print(f"    RGB V1: {'✓' if rgb_video_path else '✗'}")
+            print(f"    RGB V1: {'✓' if rgb_video1_path else '✗'}")
+            print(f"    RGB V2: {'✓' if rgb_video2_path else '✗'}")
             print(f"    Pressure video: {'✓' if pressure_video_path else '✗'}")
             return False
         
@@ -212,29 +215,33 @@ class DataProcessor:
         
         # Get video information
         try:
-            rgb_frame_count, rgb_fps, _, _ = self.get_video_info(rgb_video_path)
+            rgb1_frame_count, rgb1_fps, _, _ = self.get_video_info(rgb_video1_path)
+            rgb2_frame_count, rgb2_fps, _, _ = self.get_video_info(rgb_video2_path)
             pressure_frame_count, pressure_fps, _, _ = self.get_video_info(pressure_video_path)
         except Exception as e:
             print(f"  Error reading video info: {e}")
             return False
         
-        print(f"  RGB Video: {rgb_frame_count} frames at {rgb_fps:.1f} fps")
+        print(f"  RGB Video: {rgb1_frame_count} frames at {rgb1_fps:.1f} fps")
+        print(f"  RGB Video 2: {rgb2_frame_count} frames at {rgb2_fps:.1f} fps")
         print(f"  Pressure Video: {pressure_frame_count} frames at {pressure_fps:.1f} fps")
-        
-        assert rgb_fps == pressure_fps, "RGB and Pressure videos must have different fps"
-        
+       
+        assert rgb1_fps == pressure_fps, "RGB and Pressure videos must have different fps"
+        assert rgb2_fps == pressure_fps, "RGB 2 and Pressure videos must have different fps"
+        assert rgb1_fps == rgb2_fps, "RGB videos must have the same fps"
+
         # Calculate trimming based on offset
         if offset < 0:
             # Negative offset: trim RGB videos from the beginning
             rgb_start = abs(offset)
             pressure_start = 0
-            rgb_available = rgb_frame_count - rgb_start
+            rgb_available = rgb1_frame_count - rgb_start
             pressure_available = pressure_frame_count
         else:
             # Positive offset: trim pressure video from the beginning
             rgb_start = 0
             pressure_start = offset
-            rgb_available = rgb_frame_count
+            rgb_available = rgb1_frame_count
             pressure_available = pressure_frame_count - pressure_start
         
         # Determine final length (minimum of available frames)
@@ -253,7 +260,7 @@ class DataProcessor:
         try:
             # Primary RGB video (V1)
             v1_output = output_dir / "Video_V1.mp4"
-            frames_written = self.trim_video(rgb_video_path, v1_output, rgb_start, rgb_end)
+            frames_written = self.trim_video(rgb_video1_path, v1_output, rgb_start, rgb_end)
             print(f"  Created Video_V1.mp4 with {frames_written} frames")
             
             # Look for V2 video (required for All.mp4)

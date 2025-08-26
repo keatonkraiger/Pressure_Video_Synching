@@ -1,6 +1,6 @@
 # Data Synchronization
 
-## Preparation
+## Installation
 
 You should first install the required packages:
 
@@ -8,7 +8,11 @@ You should first install the required packages:
 pip install -r reqs.txt
 ```
 
-We recommend starting with two directories. First is the main data directory. For OM data, this should look something this: 
+You may also need to install FFMPEG (`conda install -c conda-forge ffmpeg`)
+
+## Preparation
+
+We recommend starting with two directories. First is the main data directory. For OM data, this should look something like: 
 
 ```
 Data
@@ -33,7 +37,7 @@ Raw_pressure
   |  |-OM2_R.csv
   |  |-...
 ```
-In the above data, I have two subjects with N OM takes.
+In the above data, I have one subject with N OM takes.
 
 ## Pressure Processing
 
@@ -54,7 +58,7 @@ Data
   |  |  |-OM1_Original_Pressure.mp4
 ```
 
-**Important**: The above code assumes the foot pressure is recorded at 100fps.
+**Important**: The above code assumes the foot pressure is recorded at 100fps. If it is not, you'll need to adjust this manually.
 
 ## Data Synchronization
 
@@ -64,9 +68,9 @@ To then synchronize the data, you'll run
 python syncher.py
 ```
 
-You should then load in one of the video views by clicking the `Load RGB Video` button (OM1_V1.mp4 for example), then the pressure video with the `Load Pressure Video` (OM1_Original_Pressure.mp4 for example).
+You should then load in one of the video views by clicking the `Load RGB Video` button (OM1_V1.mp4 for example), then the pressure video with the `Load Pressure Video` (Original_Pressure.mp4 for example).
 
-**Important**: The synching can only be done if BOTH videos are at 50 fps. The pressure cleaning script subsamples the pressure to 50fps (make sure its originally 100 fps). If the RGB video is not at 50 fps, you'll need to resample it before syncing. You could use ffmpeg for this purpose:
+**Important**: The synching can only be done if BOTH videos are at 50 fps. The pressure cleaning script subsamples the pressure to 50fps (make sure its originally 100 fps). If the RGB video is not at 50 fps the syncher will give you an option to run ffmpeg and convert your video. This requires it to be installed (`conda install -c conda-forge ffmpeg`). If it doesn't work in the syncher you could run the command from your terminal: 
 
 ```
 ffmpeg -i input.mp4 -r 50 output.mp4

@@ -256,6 +256,7 @@ def process_all_enhanced(data_dir, save_dir=None, min_val=10, max_val=862,
             continue
 
         base = fname[:-6]  # Remove _L.csv
+
         left_path = os.path.join(data_dir, f"{base}_L.csv")
         right_path = os.path.join(data_dir, f"{base}_R.csv")
         
@@ -283,11 +284,12 @@ def process_all_enhanced(data_dir, save_dir=None, min_val=10, max_val=862,
         processed.append((base, combined))
 
         if save_dir:
-            save_path = os.path.join(save_dir, f"{base}_Raw_Pressure.npy")
+            save_path = os.path.join(save_dir, f"{base}/Original_Pressure.npy")
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             np.save(save_path, combined)
             print(f"  → Saved to: {save_path}")
 
-            video_path = os.path.join(save_dir, f"{base}_Raw_Pressure.mp4")
+            video_path = os.path.join(save_dir, f"{base}/Original_Pressure.mp4")
             print(f"  → Generating video: {video_path}")
             save_pressure_video(combined, video_path, fps=target_fps)
 
