@@ -133,15 +133,6 @@ def apply_median_filter_selective(data, kernel_size=3, high_threshold=500):
     return cleaned_data
 
 def clip_pressure_values_enhanced(data, min_val, max_val, impossible_threshold=1500):
-    """
-    Enhanced clipping that handles impossible values more intelligently.
-    
-    Args:
-        data: pressure data array
-        min_val: minimum valid pressure
-        max_val: maximum valid pressure  
-        impossible_threshold: values above this are set to 0 (impossible readings)
-    """
     clipped = np.copy(data)
     
     # Set impossible high values to zero instead of max_val
@@ -155,17 +146,6 @@ def clip_pressure_values_enhanced(data, min_val, max_val, impossible_threshold=1
 
 def clean_pressure_data(data, min_val=10, max_val=862, impossible_threshold=1500,
                        remove_isolated=True, remove_temporal=True, apply_median=True):
-    """
-    Comprehensive pressure data cleaning pipeline.
-    
-    Args:
-        data: 3D pressure data (frames, rows, cols)
-        min_val, max_val: normal pressure range
-        impossible_threshold: threshold for impossible readings
-        remove_isolated: whether to remove isolated pixels
-        remove_temporal: whether to remove temporal outliers
-        apply_median: whether to apply selective median filtering
-    """
     print("  → Starting data cleaning pipeline...")
     
     # Step 1: Enhanced clipping (sets impossible values to 0)
@@ -173,36 +153,7 @@ def clean_pressure_data(data, min_val=10, max_val=862, impossible_threshold=1500
     impossible_count = np.sum(data > impossible_threshold)
     if impossible_count > 0:
         print(f"    • Set {impossible_count} impossible readings (>{impossible_threshold}) to zero")
-    
-    # Step 2: Remove temporal outliers
-    # if remove_temporal:
-    #     pre_temporal = np.sum(cleaned > 0)
-    #     cleaned = remove_temporal_outliers(cleaned, window_size=7, threshold_std=2.5)
-    #     post_temporal = np.sum(cleaned > 0)
-    #     temporal_removed = pre_temporal - post_temporal
-    #     if temporal_removed > 0:
-    #         print(f"    • Removed {temporal_removed} temporal outliers")
-    
-    # # Step 3: Apply selective median filtering to remaining high values
-    # if apply_median:
-    #     pre_median = np.copy(cleaned)
-    #     cleaned = apply_median_filter_selective(cleaned, kernel_size=3, high_threshold=max_val*0.8)
-    #     median_changes = np.sum(pre_median != cleaned)
-    #     if median_changes > 0:
-    #         print(f"    • Applied median filtering to {median_changes} high-value pixels")
-    
-    # # Step 4: Remove isolated pixels (do this last to catch any remaining noise)
-    # if remove_isolated:
-    #     frames_with_isolated = 0
-    #     for frame_idx in range(cleaned.shape[0]):
-    #         pre_isolated = np.sum(cleaned[frame_idx] > 0)
-    #         cleaned[frame_idx] = remove_isolated_pixels(cleaned[frame_idx], 
-    #                                                    min_neighbors=1, kernel_size=3)
-    #         post_isolated = np.sum(cleaned[frame_idx] > 0)
-    #         if post_isolated < pre_isolated:
-    #             frames_with_isolated += 1
-    #     if frames_with_isolated > 0:
-    #         print(f"    • Removed isolated pixels from {frames_with_isolated} frames")
+
     
     return cleaned
 
@@ -259,7 +210,7 @@ def process_all_enhanced(data_dir, save_dir=None, min_val=10, max_val=862,
 
         left_path = os.path.join(data_dir, f"{base}_L.csv")
         right_path = os.path.join(data_dir, f"{base}_R.csv")
-        
+
         if not os.path.exists(right_path):
             print(f"[!] Missing right file for: {base}")
             continue

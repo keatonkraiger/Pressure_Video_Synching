@@ -1,105 +1,140 @@
-# Data Synchronization
+# Creating OM Dataset
 
-## Installation
+## Pipeline Overview
+This pipeline processes multimodal motion capture data (video, pressure, OpenPose, mocap) and synchronizes everything to 50fps.
 
-You should first install the required packages:
+## Steps
 
-```
-pip install -r reqs.txt
-```
-
-You may also need to install FFMPEG (`conda install -c conda-forge ffmpeg`)
-
-## Preparation
-
-We recommend starting with two directories. First is the main data directory. For OM data, this should look something like: 
-
-```
-Data
-  |-Alice
-  |  |-OM1
-  |  |  |-OM1_V1.mp4
-  |  |  |-OM1_V2.mp4
-  |  |-OM2
-  |  |  |-OM2_V1.mp4
-  |  |  |-OM2_V2.mp4
-  |  |-...
-  |  |  |-...
-  ```
-
-Then a folder with the raw pressure data formatted something like:
-```
-Raw_pressure
-  |-Alice
-  |  |-OM1_L.csv
-  |  |-OM1_R.csv
-  |  |-OM2_L.csv
-  |  |-OM2_R.csv
-  |  |-...
-```
-In the above data, I have one subject with N OM takes.
-
-## Pressure Processing
-
-To first processing the raw pressure run the command
-
-```
-python clean_pressure.py --data_dir Raw_pressure --save_dir Data
+### 1. Convert videos to 50fps
+Standardize all videos to 50fps for consistent processing.
+```bash
+python scripts/convert_all_fps.py --root_dir raw_data/Video/<subject_name>
 ```
 
-This will generate files like this for each OM dir:
+**Important**: Track which videos had their fps changed (e.g., 25fps→50fps). You'll need this information in step 3.
+
+---
+
+### 2. Clean and process pressure data
+Generate cleaned pressure `.npy` files and videos at 50fps.
+```bash
+python scripts/clean_pressure.py \
+    --data_dir raw_data/Pressure_CSVs/<subject_name> \
+    --save_dir untrimmed/Pressure/<subject_name>
 ```
-Data
-  |-Alice
-  |  |-OM1
-  |  |  |-OM1_V1.mp4
-  |  |  |-OM1_V2.mp4
-  |  |  |-OM1_Original_Pressure.npy
-  |  |  |-OM1_Original_Pressure.mp4
-```
 
-**Important**: The above code assumes the foot pressure is recorded at 100fps. If it is not, you'll need to adjust this manually.
+---
 
-## Data Synchronization
-
-To then synchronize the data, you'll run 
-
-```
+### 3. Generate synchronization offsets
+Manually determine frame offsets between pressure and video data using the syncher tool.
+```bash
 python syncher.py
 ```
 
-You should then load in one of the video views by clicking the `Load RGB Video` button (OM1_V1.mp4 for example), then the pressure video with the `Load Pressure Video` (Original_Pressure.mp4 for example).
+For each video, create a JSON config file in your offsets directory: `synch_offsets/<subject_name>/OM<idx>.json`
 
-**Important**: The synching can only be done if BOTH videos are at 50 fps. The pressure cleaning script subsamples the pressure to 50fps (make sure its originally 100 fps). If the RGB video is not at 50 fps the syncher will give you an option to run ffmpeg and convert your video. This requires it to be installed (`conda install -c conda-forge ffmpeg`). If it doesn't work in the syncher you could run the command from your terminal: 
-
-```
-ffmpeg -i input.mp4 -r 50 output.mp4
-```
-
-**Important**: After synching it, click the `Save Sync Config` button and save the configuration file in the appropriate directory and name it `config.json`. For example, save the config file for OM1 as `Data/Alice/OM1/config.json`.
-
-This will be done for each OM folder resulting in a directory structure like this:
-
-```
-Data
-  |-Alice
-  |  |-OM1
-  |  |  |-OM1_V1.mp4
-  |  |  |-OM1_V2.mp4
-  |  |  |-OM1_Original_Pressure.npy
-  |  |  |-OM1_Original_Pressure.mp4
-  |  |  |-config.json
+**Critical**: If a video's fps was changed in step 1, add `"original_video_fps"` to the config:
+```json
+{
+  "offset": -50,
+  "original_video_fps": 25.0
+}
 ```
 
-## Final Dataset Creation
+If the video was already 50fps, you can omit `original_video_fps` (defaults to 50.0).
 
-Once you've processed the foot pressure, synched and saved the config you may run the following script to generate clean files for each OM:
+---
 
-```
-python create_final_data.py --input_path Data/Alice --save_dir Cleaned/Alice
+### 4. Run OpenPose
+Process each 50fps video through OpenPose to extract 2D keypoints. Output should go to `raw_data/openpose_output/<subject_name>/OM<idx>/OM<idx>_V[1|2]_jsons/`.
+
+---
+
+### 5. Convert OpenPose JSONs to NPY format
+Convert OpenPose JSON outputs to consolidated `.npy` arrays.
+```bash
+python scripts/format_OP_jsons.py --name <subject_name>
 ```
 
-To run a single OM, you may pass `--input_path` a specific OM directory, for example:
+Optional arguments:
+- `--specific_oms` (e.g., `1 3` to process only OM1 and OM3)
+
+---
+
+### 6. Triangulate 3D poses
+Generate 3D poses from stereo 2D OpenPose keypoints.
+```bash
+python scripts/triangulate_oms.py --subjects <subject_name>
 ```
-python create_final_data.py --input_path Data/Alice/OM1 --save_dir Cleaned/Alice
+
+Optional arguments:
+- `--specific_oms` (e.g., `OM1 OM3`)
+- `--animate` (generate animation videos)
+- `--dry_run` (don't save files)
+
+**Important**: For subjects Keaton, Kyle, Varad, Spencer, and Abhinav, do NOT use `--no_world_fix` flag (world-frame correction is required).
+
+---
+
+### 7. Extract Vicon model outputs
+Extract CoM, joints, and markers from Vicon JSON files.
+```bash
+python scripts/get_model_output.py --person <subject_name>
 ```
+
+**Important**: For subjects Keaton, Kyle, Varad, Spencer, and Abhinav, do NOT use `--no_world_fix` flag (Rz(-90°) transformation is required).
+
+---
+
+### 8. Combine and synchronize all modalities
+Combine all data streams (video, pressure, OpenPose, mocap) with proper synchronization.
+```bash
+python scripts/combine_all.py \
+    --name <subject_name> \
+    --offsets_dir synch_offsets
+```
+
+Optional arguments:
+- `--specific_oms` (e.g., `1 3` to process only OM1 and OM3)
+
+---
+
+## Post-processing Pressure Cleaning
+
+Some of the takes have faulty pressure sensors. Fixing them is a trial and error process.
+
+
+## Directory Structure
+```
+raw_data/
+├── Video/<subject_name>/OM<idx>_V[1|2].mp4
+├── Pressure_CSVs/<subject_name>/OM<idx>_[L|R].csv
+├── openpose_output/<subject_name>/OM<idx>/OM<idx>_V[1|2]_jsons/
+├── XCPs/<subject_name>.xcp
+└── Model_output/<subject_name>/OM<idx>.json
+
+untrimmed/
+├── Pressure/<subject_name>/OM<idx>/Original_Pressure.npy
+├── BODY25/<subject_name>/OM<idx>/BODY25_V[1|2].npy, BODY25_3D.npy
+└── Model_output/<subject_name>/OM<idx>/MOCAP_3D.npy, CoM.npy, etc.
+
+synch_offsets/
+└── <subject_name>/OM<idx>.json
+
+Complete/
+└── <subject_name>/OM<idx>/
+    ├── Video_V[1|2].mp4
+    ├── pressure.npy
+    ├── BODY25_V[1|2].npy, BODY25_3D.npy
+    ├── MOCAP_3D.npy, MOCAP_MRK.npy
+    └── CoM.npy, CoM_floor.npy
+```
+
+---
+
+## Notes
+
+- All final data in `Complete/` is synchronized at 50fps
+- The pipeline intelligently handles different mocap sampling rates (25Hz, 50Hz, 100Hz)
+- Vicon data is automatically resampled to match video/OpenPose frame counts
+- Frame offsets account for recording start time differences between pressure and video systems
